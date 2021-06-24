@@ -1,13 +1,16 @@
-import { mkdirSync, createWriteStream, readFile, readdir } from "fs";
-import { resolve, basename } from "path";
+import axios from "axios";
+import { createWriteStream, promises as fs } from "fs";
+import { URL } from "url";
 import { Page } from "puppeteer";
 import { boolean } from "boolean";
 import * as puppeteer from "puppeteer";
-import * as request from "request";
-import * as yaml from "js-yaml";
 import * as prompts from "prompts";
+import * as yaml from "js-yaml";
+import * as path from "path";
+import * as tmp from "tmp";
 
 prompts.override({
+  yaml: process.env["SLACK_EMOJI_IMPORT_YAML"],
   host: process.env["SLACK_EMOJI_IMPORT_HOST"],
   email: process.env["SLACK_EMOJI_IMPORT_USER"],
   password: process.env["SLACK_EMOJI_IMPORT_PASS"],
@@ -25,30 +28,16 @@ interface EmojiPack {
 }
 
 interface UserInput {
+  yaml: string;
   host: string;
   email: string;
   password: string;
   show: boolean;
 }
 
-if (process.argv.length < 3) {
-  console.log("usage: slack-emoji-import path/to/emoji-pack[.yaml]");
-  process.exit(1);
-}
-
-const TYPING_DELAY = 20;
-const TEMP_DIR = resolve(__dirname, ".tmp");
-const ENTRY_URL_FACTORY = (host) =>
-  `https://${host}.slack.com/?redir=%2Fcustomize%2Femoji`;
-const EMOJI_SOURCE_PATH = resolve(process.cwd(), process.argv[2]);
-
-try {
-  mkdirSync(TEMP_DIR);
-} catch (e) {}
-
 start();
 
-async function start(): Promise<void> {
+async function start() {
   const userInput = await getUserInput();
 
   console.log("Launching browser...");
@@ -56,14 +45,19 @@ async function start(): Promise<void> {
     headless: !userInput.show,
     defaultViewport: { width: 1200, height: 1000 },
   });
+
+  console.log("Creating an incognito browser context...");
   const browserCtx = await browser.createIncognitoBrowserContext();
+
+  console.log("Opening a new tab in our browser context...");
   const page = await browserCtx.newPage();
 
   console.log("logging in...");
   await login(page, userInput);
-  console.log("logged in.");
 
-  const emojiPack = await loadEmojiPack(EMOJI_SOURCE_PATH);
+  console.log("loading emoji YAML file...");
+  const emojiPack = await loadEmojiPack(userInput);
+
   for (let emoji of emojiPack.emojis) {
     let imagePath: string;
 
@@ -77,17 +71,23 @@ async function start(): Promise<void> {
     }
 
     console.log(`uploading ${emoji.name}...`);
-    await upload(page, imagePath, emoji.name).then(sleep(100));
+    await upload(page, imagePath, emoji.name);
+    await sleep(100);
     console.log(`uploaded  ${emoji.name}.`);
   }
-  console.log(" ");
-  console.log(`Uploaded ${emojiPack.emojis.length} emojis.`);
 
+  console.log(`Uploaded ${emojiPack.emojis.length} emojis.`);
   await browser.close();
 }
 
-async function getUserInput(): Promise<UserInput> {
+async function getUserInput() {
   const results = await prompts([
+    {
+      type: "text",
+      name: "yaml",
+      message: "Emojipacks YAML Path?",
+      hint: "You can get some from https://github.com/lambtron/emojipacks",
+    },
     {
       type: "text",
       name: "host",
@@ -111,27 +111,22 @@ async function getUserInput(): Promise<UserInput> {
       initial: false,
     },
   ]);
-  return results;
+
+  return results as UserInput;
 }
 
-/**
- *
- */
-async function login(page: Page, userInput: UserInput): Promise<void> {
-  await page.goto(ENTRY_URL_FACTORY(userInput.host));
+async function login(page: Page, { host, password, email }: UserInput) {
+  const url = `https://${host}.slack.com/?redir=%2Fcustomize%2Femoji`;
+  await page.goto(url);
 
   const emailInputSelector = "#signin_form input[type=email]";
-  await page
-    .waitForSelector(emailInputSelector, { visible: true })
-    .then(sleep(500));
+  await page.waitForSelector(emailInputSelector, { visible: true });
 
-  await setInputElementValue(page, emailInputSelector, userInput.email);
+  await sleep(500);
+  await setInputElementValue(page, emailInputSelector, email);
 
-  await setInputElementValue(
-    page,
-    "#signin_form input[type=password]",
-    userInput.password
-  );
+  const passwordInputSelector = "#signin_form input[type=password]";
+  await setInputElementValue(page, passwordInputSelector, password);
 
   const signinButtonElement = await page.$("#signin_form #signin_btn");
   await signinButtonElement.click();
@@ -139,70 +134,31 @@ async function login(page: Page, userInput: UserInput): Promise<void> {
   await page.waitForSelector(emailInputSelector, { hidden: true });
 }
 
-/**
- *
- */
-function loadEmojiPack(path: string): Promise<EmojiPack> {
-  return new Promise((promiseResolve, promiseReject) => {
-    const emojiPath = resolve(__dirname, "emoji", path);
-    if (EMOJI_SOURCE_PATH.toLowerCase().endsWith(".yaml")) {
-      readFile(emojiPath, (error, yamlContent) => {
-        if (error) {
-          promiseReject(new Error("Unable to read emoji pack."));
-          return;
-        }
-        promiseResolve(yaml.load(yamlContent.toString()) as EmojiPack);
-      });
-    } else {
-      readdir(emojiPath, (error, files) => {
-        if (error) {
-          promiseReject(new Error("Unable to read emoji directory."));
-          return;
-        }
-        if (!files || files.length < 1) {
-          promiseReject(new Error("Directory does not contain any files."));
-          return;
-        }
-        const emojis = files
-          .filter((file) => !!file.match(/\.jpg|gif|png|jpeg$/i))
-          .map((file) => {
-            const src = resolve(emojiPath, file);
-            const name = file.replace(/^(.*)\..*$/, "$1");
-            return { src, name };
-          });
-        promiseResolve({
-          title: "auto-generated",
-          emojis,
-        });
-      });
-    }
-  });
+async function loadEmojiPack(userInput: UserInput) {
+  const yamlPath = userInput.yaml;
+  const yamlContent = await fs.readFile(yamlPath, { encoding: "utf-8" });
+  const yamlParsed = yaml.load(yamlContent);
+  return yamlParsed as EmojiPack;
 }
 
-/**
- *
- */
-function downloadImage(url: string): Promise<string> {
-  return new Promise((promiseResolve, promiseReject) => {
-    if (!/^https?:\/\//.test(url)) {
-      promiseReject(new Error(`Invalid url ${url}`));
-    }
+async function downloadImage(url: string) {
+  const { pathname } = new URL(url);
+  const { ext } = path.parse(pathname);
+  const tempImage = tmp.tmpNameSync({ postfix: ext });
+  const writer = createWriteStream(tempImage);
+  const response = await axios.get(url, { responseType: "stream" });
 
-    const target = resolve(TEMP_DIR, basename(url));
-    request(url)
-      .pipe(createWriteStream(target))
-      .on("finish", () => promiseResolve(target));
+  response.data.pipe(writer);
+
+  await new Promise((resolve, reject) => {
+    writer.on("finish", resolve);
+    writer.on("error", reject);
   });
+
+  return tempImage;
 }
 
-/**
- *
- */
-async function upload(
-  page: Page,
-  imagePath: string,
-  name: string
-): Promise<void> {
+async function upload(page: Page, imagePath: string, name: string) {
   await page.evaluate(async () => {
     let addEmojiButtonSelector = ".p-customize_emoji_wrapper__custom_button";
     // Wait for emoji button to appear
@@ -237,9 +193,6 @@ async function upload(
   await page.waitForSelector(saveEmojiButtonSelector, { hidden: true });
 }
 
-/**
- *
- */
 async function setInputElementValue(
   page: Page,
   querySelector: string,
@@ -254,12 +207,9 @@ async function setInputElementValue(
   await page.keyboard.up("Shift");
   await page.keyboard.press("Backspace");
   // enter new value
-  await element.type(value, { delay: TYPING_DELAY });
+  await element.type(value, { delay: 20 });
 }
 
-/**
- * Adds delay to promise chain
- */
-function sleep(time: number): () => Promise<void> {
-  return () => new Promise((resolve) => setTimeout(() => resolve(), time));
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
