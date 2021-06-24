@@ -144,7 +144,7 @@ function loadEmojiPack(path: string): Promise<EmojiPack> {
                     promiseReject(new Error('Unable to read emoji pack.'));
                     return;
                 }
-                promiseResolve(yaml.load(yamlContent.toString()));
+                promiseResolve(yaml.load(yamlContent.toString()) as EmojiPack);
             });
         } else {
             readdir(emojiPath, (error, files) => {
