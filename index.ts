@@ -1,10 +1,18 @@
 import { mkdirSync, createWriteStream, readFile, readdir } from "fs";
 import { resolve, basename } from "path";
 import { Page } from "puppeteer";
+import { boolean } from "boolean";
 import * as puppeteer from "puppeteer";
 import * as request from "request";
 import * as yaml from "js-yaml";
-import * as prompt from "prompt";
+import * as prompts from "prompts";
+
+prompts.override({
+  host: process.env["SLACK_EMOJI_IMPORT_HOST"],
+  email: process.env["SLACK_EMOJI_IMPORT_USER"],
+  password: process.env["SLACK_EMOJI_IMPORT_PASS"],
+  show: boolean(process.env["SLACK_EMOJI_IMPORT_SHOW"]),
+});
 
 interface Emoji {
   name: string;
@@ -40,9 +48,6 @@ try {
 
 start();
 
-/**
- *
- */
 async function start(): Promise<void> {
   const userInput = await getUserInput();
 
@@ -81,40 +86,32 @@ async function start(): Promise<void> {
   await browser.close();
 }
 
-/**
- *
- */
-function getUserInput(): Promise<UserInput> {
-  return new Promise((promiseResolve, promiseReject) => {
-    prompt.get(
-      [
-        {
-          description: "Slack Host",
-          name: "host",
-          required: true,
-        },
-        {
-          description: "Slack login email",
-          name: "email",
-          required: true,
-        },
-        {
-          description: "Slack password",
-          name: "password",
-          hidden: true,
-          required: true,
-        },
-        {
-          description: "Show browser",
-          name: "show",
-          type: "boolean",
-          default: false,
-          required: false,
-        },
-      ],
-      (err, result) => (err ? promiseReject(err) : promiseResolve(result))
-    );
-  });
+async function getUserInput(): Promise<UserInput> {
+  const results = await prompts([
+    {
+      type: "text",
+      name: "host",
+      message: "Slack Host?",
+    },
+    {
+      type: "text",
+      name: "email",
+      message: "Slack Login Email?",
+    },
+    {
+      type: "text",
+      name: "password",
+      message: "Slack Password?",
+      hint: "If you use third party auth such as Google, reset your password and Slack will give you a physical password",
+    },
+    {
+      type: "confirm",
+      name: "show",
+      message: "Show browser?",
+      initial: false,
+    },
+  ]);
+  return results;
 }
 
 /**
