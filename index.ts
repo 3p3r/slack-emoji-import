@@ -17,6 +17,8 @@ prompts.override({
   show: boolean(process.env["SLACK_EMOJI_IMPORT_SHOW"]),
 });
 
+tmp.setGracefulCleanup();
+
 interface Emoji {
   name: string;
   src: string;
