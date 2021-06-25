@@ -62,21 +62,26 @@ async function start() {
   const emojiPack = await loadEmojiPack(userInput);
 
   for (let emoji of emojiPack.emojis) {
-    let imagePath: string;
+    try {
+      let imagePath: string;
 
-    if (emoji.src.includes("://")) {
-      console.log(`downloading ${emoji.name}...`);
-      imagePath = await downloadImage(emoji.src);
-      console.log(`downloaded  ${emoji.name}.`);
-    } else {
-      imagePath = emoji.src;
-      console.log(`using local file for ${emoji.name}.`);
+      if (emoji.src.includes("://")) {
+        console.log(`downloading ${emoji.name}...`);
+        imagePath = await downloadImage(emoji.src);
+        console.log(`downloaded  ${emoji.name}.`);
+      } else {
+        imagePath = emoji.src;
+        console.log(`using local file for ${emoji.name}.`);
+      }
+
+      console.log(`uploading ${emoji.name}...`);
+      await timeout(upload(page, imagePath, emoji.name), 5000);
+      await sleep(100);
+      console.log(`uploaded  ${emoji.name}.`);
+    } catch (err) {
+      console.error(`unable to upload ${emoji.name}`, err);
+      continue;
     }
-
-    console.log(`uploading ${emoji.name}...`);
-    await timeout(upload(page, imagePath, emoji.name), 5000);
-    await sleep(100);
-    console.log(`uploaded  ${emoji.name}.`);
   }
 
   console.log(`Uploaded ${emojiPack.emojis.length} emojis.`);
@@ -197,7 +202,6 @@ async function upload(page: Page, imagePath: string, name: string) {
   // check if we have any errors
   try {
     await page.$(".c-alert");
-    console.log(`unable to upload ${name}, perhaps this emoji already exists?`);
   } catch {
     await page.waitForSelector(saveEmojiButtonSelector, { hidden: true });
   }
