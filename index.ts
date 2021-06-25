@@ -4,6 +4,7 @@ import { createWriteStream, promises as fs } from "fs";
 import { URL } from "url";
 import { Page } from "puppeteer";
 import { boolean } from "boolean";
+import { timeout } from "promise-timeout";
 import puppeteer from "puppeteer";
 import yaml from "js-yaml";
 import path from "path";
@@ -73,7 +74,7 @@ async function start() {
     }
 
     console.log(`uploading ${emoji.name}...`);
-    await upload(page, imagePath, emoji.name);
+    await timeout(upload(page, imagePath, emoji.name), 5000);
     await sleep(100);
     console.log(`uploaded  ${emoji.name}.`);
   }
@@ -191,8 +192,15 @@ async function upload(page: Page, imagePath: string, name: string) {
     saveEmojiButtonSelector
   );
   await saveEmojiButtonElement.click();
+  await sleep(100);
 
-  await page.waitForSelector(saveEmojiButtonSelector, { hidden: true });
+  // check if we have any errors
+  try {
+    await page.$(".c-alert");
+    console.log(`unable to upload ${name}, perhaps this emoji already exists?`);
+  } catch {
+    await page.waitForSelector(saveEmojiButtonSelector, { hidden: true });
+  }
 }
 
 async function setInputElementValue(
