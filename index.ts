@@ -1,13 +1,13 @@
 import axios from "axios";
+import prompts from "prompts";
 import { createWriteStream, promises as fs } from "fs";
 import { URL } from "url";
 import { Page } from "puppeteer";
 import { boolean } from "boolean";
-import * as puppeteer from "puppeteer";
-import * as prompts from "prompts";
-import * as yaml from "js-yaml";
-import * as path from "path";
-import * as tmp from "tmp";
+import puppeteer from "puppeteer";
+import yaml from "js-yaml";
+import path from "path";
+import tmp from "tmp";
 
 prompts.override({
   yaml: process.env["SLACK_EMOJI_IMPORT_YAML"],
